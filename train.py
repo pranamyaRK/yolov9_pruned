@@ -102,6 +102,7 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
     # Model
     check_suffix(weights, '.pt')  # check weights
     pretrained = weights.endswith('.pt')
+
     if pretrained:
         with torch_distributed_zero_first(LOCAL_RANK):
             weights = attempt_download(weights)  # download if not found locally
@@ -115,6 +116,15 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
     else:
         model = Model(cfg, ch=3, nc=nc, anchors=hyp.get('anchors')).to(device)  # create
     amp = check_amp(model)  # check AMP
+
+    # Pruning is applied here
+    for name, module in model.named_modules():
+        # check if the module is a Conv2d layer
+        if isinstance(module, torch.nn.Conv2d):
+            # apply unstructured pruning with pruning ratio of 50%
+            prune.l1_unstructured(module, name='weight', amount = 0.5)
+            prune.remove(module, 'weight')
+        LOGGER.info(f'pruning by 50%')
 
     # Freeze
     freeze = [f'model.{x}.' for x in (freeze if len(freeze) > 1 else range(freeze[0]))]  # layers to freeze
@@ -150,7 +160,11 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
     else:
         lf = lambda x: (1 - x / epochs) * (1.0 - hyp['lrf']) + hyp['lrf']  # linear
 
-    scheduler = lr_scheduler.LambdaLR(optimizer, lr_lambda=lf)
+    # default scheduler
+    # scheduler = lr_scheduler.LambdaLR(optimizer, lr_lambda=lf)
+
+    # cosine annealing used for the scheduler
+    scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max = 10)
     # from utils.plots import plot_lr_scheduler; plot_lr_scheduler(optimizer, scheduler, epochs)
 
     # EMA
